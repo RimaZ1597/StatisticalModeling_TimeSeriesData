@@ -1,0 +1,1050 @@
+---
+title: "TIME SERIES DATA ANALYSIS"
+author: "RimaZinjuwadia"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+
+```{r message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Required libraries
+
+library(tidyverse)    
+library(lme4)         
+library(ez)           
+library(performance)  
+library(cluster)      
+library(ggplot2)      
+library(dplyr)        
+library(lmerTest)     
+library(purrr)
+library(tibble)
+library(ggVennDiagram)
+library(tidyr)
+```
+
+## Results {.tabset}
+
+
+### 1) SUMMARY OF DATA & MODELING FRAMEWORK
+
+The dataset analyzed in this study comprises protein abundance measurements from Saccharomyces cerevisiae subjected to osmotic stress, as originally published by Selevsek et al. (2015). It includes 18 samples collected across six time points (T00, T015, T030, T060, T090, and T120), with three biological replicates per time point. 
+
+The analysis was based on two primary input files:
+
+1) Selevsek2015_DIA_Spectronaut_annotation.csv, which contained metadata including experimental conditions and biological replicate identifiers
+2) Selevsek2015.csv, which included quantified protein abundance values for each sample run  
+
+The study followed a single factor repeated measures design and employed univariate statistical methods to evaluate both individual protein responses and overall expression patterns. The models applied included Single-Factor ANOVA Model, Single-Factor Repeated measure ANOVA, a Linear Mixed-Effects (LMM), and Linear Model (fallback).
+
+
+```{r}
+# Metadata contains sample annotations -> condition(time points - 6) , (replicate - 3)
+meta <- read.csv("Selevsek2015_DIA_Spectronaut_annotation.csv") 
+proteins <- read.csv("selvesek2015.csv") # contains the protein abundance 
+
+# Merging meta by matching originalRUN
+df <- proteins %>%
+  pivot_longer(-originalRUN, names_to = "Protein", values_to = "Abundance") %>%
+  left_join(meta, by = c("originalRUN" = "Run")) %>%
+  filter(!is.na(Abundance))
+print(df)
+```
+
+
+### 2) DATA PREPROCESSING & TRANSFORMATION
+
+###### a)  
+
+To prepare the data for statistical analysis, the protein abundance matrix was reshaped from wide to long format, facilitating the application of linear and repeated measures models. The reshaped data were then merged with the annotation metadata using run identifiers to generate a unified, analysis-ready dataset. Proteins with missing values or low variability (defined as standard deviation ≤ 0.01) were removed to ensure statistical robustness.
+
+
+```{r}
+# Load Metadata And Protein Abundance Data
+meta <- read.csv("Selevsek2015_DIA_Spectronaut_annotation.csv")    
+proteins <- read.csv("selvesek2015.csv")                            
+
+# Reshape And Merge: Convert Wide To Long Format, Then Add Metadata
+df <- proteins %>%
+  pivot_longer(-originalRUN, names_to = "Protein", values_to = "Abundance") %>%  # Tidy long format
+  left_join(meta, by = c("originalRUN" = "Run")) %>%                             # Join metadata
+  filter(!is.na(Abundance))                                                      # Remove missing measurements
+
+# Print And Save Data File
+print(df)
+write.csv(df, "merged_protein_long_format.csv", row.names = FALSE)
+```
+###### b)  
+
+From the filtered dataset, a random subset of 150 proteins was selected to support both exploratory analysis and efficient univariate modeling.
+
+```{r}
+# Randomly Select 150 Proteins
+set.seed(123)
+selected_proteins <- sample(unique(df$Protein), 150)
+print(selected_proteins)
+
+# Subset Data By Selected Proteins
+df_subset <- df %>% filter(Protein %in% selected_proteins)
+print(df_subset)
+
+# Save the subset data
+write.csv(df_subset, "subset_protein_data.csv", row.names = FALSE)
+```
+
+
+### 1) SINGLE-FACTOR ANOVA MODEL
+
+```{r}
+# Create Dataframe to store anova p-values
+aov_results <- data.frame()
+for (prot in unique(df_subset$Protein)) {
+  temp <- df_subset %>% filter(Protein == prot)
+  pval <- tryCatch({
+    summary(aov(Abundance ~ Condition, data = temp))[[1]]$`Pr(>F)`[1]
+  }, error = function(e) NA)
+  aov_results <- rbind(aov_results, data.frame(Protein = prot, AOV_p = pval))
+}
+write.csv(aov_results, "results_single_factor_anova.csv", row.names = FALSE)
+print(aov_results)
+```
+
+
+##### a)  Distribution of One-way ANOVA p-values 
+
+```{r}
+# Distribution of p-values into standard significance thresholds.
+aov_results$Significance <- cut(
+  aov_results$AOV_p,
+  breaks = c(-Inf, 0.001, 0.05, Inf),
+  labels = c("< 0.001", "0.001 – 0.05", "> 0.05"),
+  right = FALSE
+)
+# Create summary as tibble
+summary_tbl <- as.data.frame(table(Significance = aov_results$Significance)) %>%
+  as_tibble() %>%
+  rename(Count = Freq) %>%
+  mutate(Percentage = round(Count / sum(Count) * 100, 1))
+# Print to console
+print(summary_tbl)
+write.csv(summary_tbl,"(summary_tbl.csv", row.names = FALSE)
+```
+
+##### b) Per Protein One Way Anova Table
+
+```{r}
+aov_full_list <- list()
+for (prot in unique(df_subset$Protein)) {
+  temp <- df_subset %>% filter(Protein == prot)
+  result <- tryCatch({
+    model <- aov(Abundance ~ Condition, data = temp)
+    tbl <- as.data.frame(summary(model)[[1]])
+    tbl$Protein <- prot
+    tbl$Term <- rownames(tbl)
+    tbl
+  }, error = function(e) NULL)
+
+  if (!is.null(result)) {
+    aov_full_list[[prot]] <- result
+  }
+}
+aov_full_df <- do.call(rbind, aov_full_list)
+# Round or format values
+aov_full_df <- aov_full_df %>%
+  mutate(across(
+    c(`Sum Sq`, `Mean Sq`, `F value`, `Pr(>F)`),
+    ~ round(.x, 3)
+  ))
+aov_full_df <- aov_full_df[, c("Protein", "Term", "Df", "Sum Sq", "Mean Sq", "F value", "Pr(>F)")]
+# Save to CSV
+write.csv(aov_full_df, "anova_full_table_per_protein.csv", row.names = FALSE)
+# Preview
+head(aov_full_df)
+```
+
+
+
+### REPEATED MEASURES ANOVA MODEL
+
+
+##### a) RM ANOVA P-values
+
+```{r}
+rm_results <- data.frame()
+for (prot in unique(df_subset$Protein)) {
+  temp <- df_subset %>%
+    filter(Protein == prot) %>%
+    mutate(
+      Condition = as.factor(Condition),
+      BioReplicate = as.factor(BioReplicate)
+    )
+  if (length(unique(temp$Condition)) < 2 || length(unique(temp$BioReplicate)) < 2) {
+    rm_results <- rbind(rm_results, data.frame(Protein = prot, RM_p = NA))
+    next
+  }
+  # Repeated Measures ANOVA
+  pval <- tryCatch({
+    # within-subject correlation
+    model <- aov(Abundance ~ Condition + Error(BioReplicate/Condition), data = temp) 
+    # Extract p-value manually
+    summary_out <- summary(model)
+    p <- summary_out[[2]][[1]]$`Pr(>F)`[1]
+    p
+  }, error = function(e) {
+    NA
+  })
+  rm_results <- rbind(rm_results, data.frame(Protein = prot, RM_p = pval))
+}
+
+#write.csv(rm_results, "results_repeated_measures_ANOVA.csv", row.names = FALSE)
+print(rm_results)
+```
+
+##### b) RM ANOVA P-values & F- values Summary and BioreRlicate count check
+
+```{r}
+library(dplyr)
+rm_results <- data.frame()
+replicate_summary <- data.frame()  # track replicate counts
+for (prot in unique(df_subset$Protein)) {
+  temp <- df_subset %>%
+    filter(Protein == prot) %>%
+    mutate(
+      Condition = as.factor(Condition),
+      BioReplicate = as.factor(BioReplicate)
+    )
+  # Count replicates and timepoints
+  num_reps <- length(unique(temp$BioReplicate))
+  num_conds <- length(unique(temp$Condition))
+  # Store replicate info
+  replicate_summary <- rbind(replicate_summary, data.frame(
+    Protein = prot,
+    Num_Replicates = num_reps,
+    Num_Timepoints = num_conds
+  ))
+  # Skip if data is incomplete
+  if (num_conds < 2 || num_reps < 2) {
+    rm_results <- rbind(rm_results, data.frame(
+      Protein = prot,
+      RM_p = NA,
+      F_value = NA
+    ))
+    next
+  }
+  # Run RM ANOVA
+  pval <- NA
+  fval <- NA
+  tryCatch({
+    model <- aov(Abundance ~ Condition + Error(BioReplicate/Condition), data = temp)
+    summary_out <- summary(model)
+    pval <- summary_out[[2]][[1]]$`Pr(>F)`[1]
+    fval <- summary_out[[2]][[1]]$`F value`[1]
+  }, error = function(e) {})
+  rm_results <- rbind(rm_results, data.frame(
+    Protein = prot,
+    RM_p = pval,
+    F_value = fval
+  ))
+}
+# Save results
+#write.csv(rm_results, "results_rm_anova_only.csv", row.names = FALSE)
+#write.csv(replicate_summary, "replicate_summary_check.csv", row.names = FALSE)
+
+# View summaries
+print(head(rm_results))
+print(head(replicate_summary))
+
+library(dplyr)
+library(tibble)
+
+# Categorize p-values into bins
+rm_results$P_Significance <- cut(
+  rm_results$RM_p,
+  breaks = c(-Inf, 0.001, 0.05, Inf),
+  labels = c("< 0.001", "0.001 – 0.05", "> 0.05"),
+  right = FALSE
+)
+
+# Categorize F-values into bins
+rm_results$F_Range <- cut(
+  rm_results$F_value,
+  breaks = c(-Inf, 1, 2, 5, 10, Inf),
+  labels = c("< 1", "1 – 2", "2 – 5", "5 – 10", "> 10"),
+  right = FALSE
+)
+
+# Summary table for p-value bins
+pval_summary_tbl <- as.data.frame(table(Significance = rm_results$P_Significance)) %>%
+  as_tibble() %>%
+  rename(Count = Freq) %>%
+  mutate(Percentage = round(Count / sum(Count) * 100, 1))
+
+# Summary table for F-value bins
+fval_summary_tbl <- as.data.frame(table(F_Value_Bin = rm_results$F_Range)) %>%
+  as_tibble() %>%
+  rename(Count = Freq) %>%
+  mutate(Percentage = round(Count / sum(Count) * 100, 1))
+
+# Print results
+print(pval_summary_tbl)
+print(fval_summary_tbl)
+
+# Save results
+write.csv(fval_summary_tbl, "results_fval_summary_tbl.csv", row.names = FALSE)
+write.csv(pval_summary_tbl, "results_pval_summary_tbl.csv", row.names = FALSE)
+
+```
+
+##### c) RM ANOVA Summary per proteins
+
+```{r}
+# Initialize result list
+rm_results_full <- data.frame()
+
+# Loop through proteins
+for (prot in unique(df_subset$Protein)) {
+  temp <- df_subset %>%
+    filter(Protein == prot) %>%
+    mutate(
+      Condition = as.factor(Condition),
+      BioReplicate = as.factor(BioReplicate)
+    )
+  
+  # Skip if insufficient groups
+  if (length(unique(temp$Condition)) < 2 || length(unique(temp$BioReplicate)) < 2) {
+    rm_results_full <- bind_rows(rm_results_full, 
+                                 data.frame(Protein = prot, Term = NA, Df = NA, Sum_Sq = NA, Mean_Sq = NA, F_value = NA, P_value = NA))
+    next
+  }
+
+  # Try RM ANOVA and extract full table
+  tryCatch({
+    model <- aov(Abundance ~ Condition + Error(BioReplicate/Condition), data = temp)
+    summary_out <- summary(model)
+
+    # Extract BioReplicate stratum
+    bio_stratum <- summary_out[["Error: BioReplicate"]][[1]]
+    if (nrow(bio_stratum) > 0) {
+      bio_replicate_row <- bio_stratum[1, ]
+      rm_results_full <- bind_rows(rm_results_full,
+        data.frame(
+          Protein = prot,
+          Term = "BioReplicate",
+          Df = bio_replicate_row[["Df"]],
+          Sum_Sq = bio_replicate_row[["Sum Sq"]],
+          Mean_Sq = bio_replicate_row[["Mean Sq"]],
+          F_value = bio_replicate_row[["F value"]],
+          P_value = bio_replicate_row[["Pr(>F)"]]
+        )
+      )
+    }
+
+    # Extract Condition and Residuals from nested stratum
+    cond_stratum <- summary_out[["Error: BioReplicate:Condition"]][[1]]
+    rownames_stratum <- rownames(cond_stratum)
+
+    for (i in seq_len(nrow(cond_stratum))) {
+      row <- cond_stratum[i, ]
+      rm_results_full <- bind_rows(rm_results_full,
+        data.frame(
+          Protein = prot,
+          Term = rownames_stratum[i],
+          Df = row[["Df"]],
+          Sum_Sq = row[["Sum Sq"]],
+          Mean_Sq = row[["Mean Sq"]],
+          F_value = row[["F value"]],
+          P_value = row[["Pr(>F)"]]
+        )
+      )
+    }
+  }, error = function(e) {
+    rm_results_full <<- bind_rows(rm_results_full,
+                                  data.frame(Protein = prot, Term = NA, Df = NA, Sum_Sq = NA, Mean_Sq = NA, F_value = NA, P_value = NA))
+  })
+}
+
+# Round numeric values for better readability
+rm_results_full <- rm_results_full %>%
+  mutate(across(
+    c(Sum_Sq, Mean_Sq, F_value, P_value),
+    ~ round(.x, 3)
+  ))
+
+# Save to CSV
+write.csv(rm_results_full, "rm_anova_full_results.csv", row.names = FALSE)
+
+# View a few results
+print(head(rm_results_full))
+```
+
+##### d) RM ANOVA Summary
+
+```{r}
+summary_stats_clean <- tibble::tibble(
+  Metric = c(
+    "Total Proteins Tested",
+    "Valid p-values", 
+    "Significant p-values (p < 0.05)", 
+    "Highly Significant p-values (p < 0.001)",
+    "Mean p-value", 
+    "Median p-value", 
+    "Min p-value", 
+    "Max p-value",
+    "Mean F-value", 
+    "Median F-value", 
+    "Max F-value"
+  ),
+  Value = c(
+    nrow(rm_results),
+    sum(!is.na(rm_results$RM_p)),
+    sum(rm_results$RM_p < 0.05, na.rm = TRUE),
+    sum(rm_results$RM_p < 0.001, na.rm = TRUE),
+    round(mean(rm_results$RM_p, na.rm = TRUE), 4),
+    round(median(rm_results$RM_p, na.rm = TRUE), 4),
+    round(min(rm_results$RM_p, na.rm = TRUE), 4),
+    round(max(rm_results$RM_p, na.rm = TRUE), 4),
+    round(mean(rm_results$F_value, na.rm = TRUE), 4),
+    round(median(rm_results$F_value, na.rm = TRUE), 4),
+    round(max(rm_results$F_value, na.rm = TRUE), 4)
+  )
+)
+
+print(summary_stats_clean)
+
+```
+
+### 3) Linear Mixed Effects Model (LMM) & 4) Linaer Model (LM)
+
+```{r message=FALSE, warning=FALSE}
+
+#Fit LMM or fallback LM per protein
+
+lmm_results <- function(df_subset) {
+  tryCatch({
+    if (length(unique(df_subset$Condition)) < 2 || length(unique(df_subset$BioReplicate)) < 2) {
+      return(list(p = NA, aic = NA, icc = NA, method = "Insufficient"))
+    }
+
+    lmm <- lmer(Abundance ~ Condition + (1 | BioReplicate), data = df_subset, REML = FALSE)
+
+    if (lme4::isSingular(lmm, tol = 1e-4)) {
+      lm_fit <- lm(Abundance ~ Condition, data = df_subset)
+      f_stat <- summary(lm_fit)$fstatistic
+      f_pval <- pf(f_stat[1], f_stat[2], f_stat[3], lower.tail = FALSE)
+      coefs <- summary(lm_fit)$coefficients
+      cond_rows <- grep("^Condition", rownames(coefs))
+      cond_pvals <- coefs[cond_rows, "Pr(>|t|)"]
+      lm_p <- if (length(cond_pvals) > 0) min(cond_pvals, na.rm = TRUE) else NA
+      return(list(p = lm_p, aic = AIC(lm_fit), icc = NA, method = "LM"))
+    }
+
+    coefs <- summary(lmm)$coefficients
+    cond_rows <- grep("^Condition", rownames(coefs))
+    cond_pvals <- coefs[cond_rows, "Pr(>|t|)"]
+    lmm_p <- if (length(cond_pvals) > 0) min(cond_pvals, na.rm = TRUE) else NA
+    lmm_aic <- AIC(lmm)
+
+    vc <- VarCorr(lmm)
+    var_subject <- as.numeric(vc$BioReplicate)
+    var_resid <- attr(vc, "sc")^2
+    icc <- var_subject / (var_subject + var_resid)
+
+    list(p = lmm_p, aic = lmm_aic, icc = icc, method = "LMM")
+  }, error = function(e) {
+    list(p = NA, aic = NA, icc = NA, method = "Error")
+  })
+}
+
+results <- map_dfr(unique(df_subset$Protein), function(prot) {
+  df_prot <- df_subset %>% filter(Protein == prot)
+  stats <- lmm_results(df_prot)
+  tibble(
+    Protein = prot,
+    P_value = round(stats$p, 3),
+    AIC = round(stats$aic, 2),
+    ICC = round(stats$icc, 3),
+    Method = stats$method
+  )
+})
+
+write.csv(results, "final_model_selection_results.csv", row.names = FALSE)
+print(head(results))
+
+# Post-processing: Add p-values per method and model selection
+
+# 1. Load or compute unified model results
+final_results <- read.csv("final_model_selection_results.csv")
+
+final_results <- final_results %>%
+  mutate(
+    LMM_p = ifelse(Method == "LMM", P_value, NA),
+    LM_p  = ifelse(Method == "LM",  P_value, NA),
+    LMM_AIC = ifelse(Method == "LMM", AIC, NA),
+    LM_AIC  = ifelse(Method == "LM",  AIC, NA),
+    Final_p = ifelse(!is.na(ICC) & ICC >= 0.01, LMM_p, LM_p),
+    ModelUsed = ifelse(!is.na(ICC) & ICC >= 0.01, "LMM", "LM")
+  )
+
+# format numbers
+fresults <- final_results %>%
+  mutate(
+    P_value = signif(P_value, 3),
+    AIC = round(AIC, 2),
+    ICC = round(ICC, 3),
+    LMM_p = signif(LMM_p, 3),
+    LM_p = signif(LM_p, 3),
+    LMM_AIC = round(LMM_AIC, 2),
+    LM_AIC = round(LM_AIC, 2),
+    Final_p = signif(Final_p, 3)
+  )
+
+
+write.csv(fresults, "final_model_results.csv", row.names = FALSE)
+print(head(fresults))
+
+#Separate results by model type
+results_LMM <- results %>% filter(Method == "LMM")
+results_LM  <- results %>% filter(Method == "LM")
+
+# Save each to a separate file
+#write.csv(results_LMM, "results_LMM_only.csv", row.names = FALSE)
+#write.csv(results_LM,  "results_LM_only.csv",  row.names = FALSE)
+```
+
+
+##### a) Venn Diagram of Statistically Significant Proteins Identified by LMM, LM, and Final Model Selection
+
+```{r}
+# Define significance flags and Venn diagram sets
+
+final_results <- final_results %>%
+  mutate(
+    LMM_sig   = ModelUsed == "LMM" & !is.na(LMM_p) & LMM_p < 0.05,
+    LM_sig    = ModelUsed == "LM"  & !is.na(LM_p)  & LM_p < 0.05,
+    Final_sig = Final_p < 0.05
+  )
+
+sig_LMM   <- final_results %>% filter(LMM_sig) %>% pull(Protein)
+sig_LM    <- final_results %>% filter(LM_sig)  %>% pull(Protein)
+sig_Final <- final_results %>% filter(Final_sig) %>% pull(Protein)
+
+venn_sets <- list(
+  LMM   = sig_LMM,
+  LM    = sig_LM,
+  Final = sig_Final
+)
+
+venn_plot <- ggVennDiagram(venn_sets, label_alpha = 0, edge_size = 0.5) +
+  scale_fill_gradient(low = "Gray", high = "White") +
+  labs(
+    title = "Venn Diagram of Significant Proteins by Model",
+    subtitle = "Overlap between LMM, LM, and Final Selected Proteins (p < 0.05)"
+  ) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 16, color = "black"),
+    plot.subtitle = element_text(face = "bold", size = 12, color = "black"),
+    text = element_text(color = "Black")
+  )
+
+print(venn_plot)
+
+
+# --- Summary of significant protein overlaps (Venn diagram logic) ---
+cat("Significant Proteins by Model:\n")
+cat("  sig_LMM      :", length(sig_LMM), "\n")
+cat("  sig_LM       :", length(sig_LM), "\n")
+cat("  sig_Final    :", length(sig_Final), "\n")
+cat("  LMM ∩ Final  :", length(intersect(sig_LMM, sig_Final)), "\n")
+cat("  LM ∩ Final   :", length(intersect(sig_LM, sig_Final)), "\n")
+cat("  LMM ∩ LM     :", length(intersect(sig_LMM, sig_LM)), "\n")
+cat("  LMM ∩ LM ∩ Final :", length(Reduce(intersect, list(sig_LMM, sig_LM, sig_Final))), "\n")
+
+```
+
+##### b) Summary Statistics for Proteins Modeled Using LMM & LMs
+
+```{r}
+
+# Summary:LMM and LM
+
+lmm_summary <- final_results %>%
+  filter(ModelUsed == "LMM", !is.na(LMM_p)) %>%
+  summarize(
+    Count_LMM       = n(),
+    Significant_LMM = sum(LMM_p < 0.05, na.rm = TRUE),
+    Mean_ICC        = mean(ICC, na.rm = TRUE),
+    Max_ICC         = max(ICC, na.rm = TRUE),
+    Mean_LMM_p      = mean(LMM_p, na.rm = TRUE),
+    Median_LMM_p    = median(LMM_p, na.rm = TRUE)
+  ) %>%
+  mutate(
+    Mean_ICC     = round(Mean_ICC, 3),
+    Max_ICC      = round(Max_ICC, 3),
+    Mean_LMM_p   = round(Mean_LMM_p, 3),
+    Median_LMM_p = round(Median_LMM_p, 3)
+  )
+
+print(lmm_summary)
+
+
+lm_summary <- final_results %>%
+  filter(ModelUsed == "LM", !is.na(LM_p)) %>%
+  summarize(
+    Count_LM       = n(),
+    Significant_LM = sum(LM_p < 0.05, na.rm = TRUE),
+    Mean_LM_p      = mean(LM_p, na.rm = TRUE),
+    Median_LM_p    = median(LM_p, na.rm = TRUE)
+  ) %>%
+  mutate(
+    Mean_LM_p   = round(Mean_LM_p, 3),
+    Median_LM_p = round(Median_LM_p, 3)
+  )
+
+print(lm_summary)
+
+# Optional: Save rounded LM summary
+write.csv(lm_summary, "results_lm_summary.csv", row.names = FALSE)
+write.csv(lmm_summary, "results_lmm_summary.csv", row.names = FALSE)
+```
+
+
+### 5) Reduced vs. Full Model Evaluation - Nested LM 
+
+```{r}
+# Nested LM Comparison(unbalanced design check)
+
+anova_compare_results <- data.frame()
+
+for (prot in unique(df_subset$Protein)) {
+  temp <- df_subset %>% filter(Protein == prot)
+
+  pval <- tryCatch({
+    full_model <- lm(Abundance ~ Condition, data = temp) #Full
+    null_model <- lm(Abundance ~ 1, data = temp) #Reduced 
+    comp <- anova(null_model, full_model)
+    comp$`Pr(>F)`[2]
+  }, error = function(e) NA)
+
+  anova_compare_results <- rbind(anova_compare_results, data.frame(Protein = prot, Nested_F_p = pval))
+}
+
+anova_compare_results <- anova_compare_results %>%
+  mutate(
+    Nested_F_p = round(Nested_F_p, 5),
+    Significance = case_when(
+      Nested_F_p < 0.001 ~ "< 0.001",
+      Nested_F_p < 0.05  ~ "0.001 – 0.05",
+      TRUE               ~ "> 0.05"
+    ),
+    Interpretation = ifelse(Nested_F_p < 0.05,
+                            "Reject H₀: Condition has significant effect",
+                            "Fail to reject H₀: No significant condition effect")
+  )
+
+# Model Hypothesis Sumamary
+hypothesis_summary <- anova_compare_results %>%
+  mutate(Decision = ifelse(Nested_F_p < 0.05, "Reject H₀", "Fail to reject H₀")) %>%
+  group_by(Decision) %>%
+  summarise(
+    Count = n(),
+    Percentage = round(n() / nrow(anova_compare_results) * 100, 1)
+  )
+
+
+#Print ans Save results
+
+print(hypothesis_summary)
+print(anova_compare_results)
+
+write.csv(hypothesis_summary, "hypothesis_summary.csv", row.names = FALSE)
+write.csv(anova_compare_results, "anova_compare_results.csv", row.names = FALSE)
+```
+
+
+### 6) MODEL USAGE ACROSS PROTEINS — All Models (ANOVA, RM ANOVA, LMM, LM, Nested LM)
+
+```{r}
+# Merge all models: ANOVA, RM ANOVA, LMM/LM (final_results), and Nested LM
+merged_models <- aov_results %>%
+  full_join(rm_results, by = "Protein") %>%
+  full_join(final_results, by = "Protein") %>%
+  full_join(anova_compare_results, by = "Protein")
+
+# Add logical flags for model usage
+model_flags <- merged_models %>%
+  mutate(
+    ANOVA      = !is.na(AOV_p),
+    RM_ANOVA   = !is.na(RM_p),
+    LMM        = ModelUsed == "LMM" & !is.na(Final_p),
+    LM         = ModelUsed == "LM"  & !is.na(Final_p),
+    NESTED_LM  = !is.na(Nested_F_p)
+  ) %>%
+  select(Protein, ANOVA, RM_ANOVA, LMM, LM, NESTED_LM)
+
+# Reshape to long format for plotting
+model_usage_long <- model_flags %>%
+  pivot_longer(cols = -Protein, names_to = "Model", values_to = "Used") %>%
+  filter(Used == TRUE)
+
+# Plot heatmap
+ggplot(model_usage_long, aes(x = Model, y = Protein)) +
+  geom_tile(fill = "Gray") +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Protein-wise Model Usage (ANOVA, RM ANOVA, LMM, LM, Nested LM)",
+    x = "Model",
+    y = "Protein"
+  ) +
+  theme(
+    text = element_text(color = "black"),        # Dark font for all text
+    axis.text = element_text(color = "black"),   # Dark font for axis labels
+    axis.title = element_text(color = "black"),  # Dark font for axis titles
+    plot.title = element_text(color = "black"),  # Dark font for plot title
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    panel.grid = element_blank()
+  )
+
+
+# Optional: Print model usage summary table
+model_summary_table <- model_usage_long %>%
+  group_by(Model) %>%
+  summarise(Count = n(), .groups = "drop")
+
+print(model_summary_table)
+
+```
+
+##### a) MODEL USAGE ACROSS PROTEINS — All Models (ANOVA, LMM, LM)
+
+```{r}
+
+# Merge ANOVA, LMM, and LM results only (exclude RM)
+merged_models <- aov_results %>%
+  full_join(final_results, by = "Protein") %>%   # final_results includes LMM and LM outcomes
+  full_join(lm_results, by = "Protein")
+
+# Add Logical Flags for Model Usage
+model_flags <- merged_models %>%
+  mutate(
+    ANOVA = !is.na(AOV_p),
+    LMM   = ModelUsed == "LMM" & !is.na(Final_p),
+    LM    = ModelUsed == "LM"  & !is.na(Final_p)
+  ) %>%
+  select(Protein, ANOVA, LMM, LM)
+
+# Reshape to Long Format for Plotting
+model_usage_long <- model_flags %>%
+  pivot_longer(cols = -Protein, names_to = "Model", values_to = "Used") %>%
+  filter(Used == TRUE)
+
+# Plot Heatmap of Model Usage
+ggplot(model_usage_long, aes(x = Model, y = Protein)) +
+  geom_tile(fill = "Gray") +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Protein-wise Model Usage (ANOVA, LMM, LM)",
+    x = "Model",
+    y = "Protein"
+  ) +
+  theme(
+    axis.text.y = element_blank(),        # Hide protein names if too many
+    axis.ticks.y = element_blank(),
+    panel.grid = element_blank()
+  )
+```
+
+
+### 7) Pairwise Comparisons
+
+##### a) Tukey Pairwise All Proteins
+
+```{r}
+# Prepare A Results List To Collect All Comparisons
+tukey_all <- list()
+
+for (prot in unique(df_subset$Protein)) {
+  temp <- df_subset %>% filter(Protein == prot)
+  model <- tryCatch({
+    aov(Abundance ~ Condition, data = temp)
+  }, error = function(e) NULL)
+
+  if (!is.null(model)) {
+    tukey <- tryCatch({
+      as.data.frame(TukeyHSD(model, "Condition")$Condition)
+    }, error = function(e) NULL)
+
+    if (!is.null(tukey)) {
+      tukey$Protein <- prot
+      tukey$Comparison <- rownames(tukey)
+      tukey_all[[prot]] <- tukey
+    }
+  }
+}
+
+# Combine All Results Into One Dataframe
+tukey_df <- bind_rows(tukey_all)
+
+# Apply FDR Correction To P-values
+tukey_df$adj_p <- p.adjust(tukey_df$`p adj`, method = "fdr")
+
+# Save to CSV
+write.csv(tukey_df, "tukey_pairwise_all_proteins.csv", row.names = FALSE)
+print(head(tukey_df, 10))  # Show first few results
+
+```
+
+
+##### b) TUKEY'S POST HOC PAIRWISE COMPARISONS (ONE-WAY ANOVA)
+
+```{r}
+# Prepare A Results List To Collect All Comparisons
+tukey_all <- list()
+for (prot in unique(df_subset$Protein)) {
+  temp <- df_subset %>% filter(Protein == prot)
+  model <- tryCatch({
+    aov(Abundance ~ Condition, data = temp)
+  }, error = function(e) NULL)
+  if (!is.null(model)) {
+    tukey <- tryCatch({
+      as.data.frame(TukeyHSD(model, "Condition")$Condition)
+    }, error = function(e) NULL)
+    if (!is.null(tukey)) {
+      tukey$Protein <- prot
+      tukey$Comparison <- rownames(tukey)
+      tukey_all[[prot]] <- tukey
+    }
+  }
+}
+
+# Combine All Results Into One Dataframe
+tukey_df <- bind_rows(tukey_all)
+
+# Applies FDR (Benjamini-Hochberg) Correction To P-values
+tukey_df$adj_p <- p.adjust(tukey_df$`p adj`, method = "fdr")
+
+# Save to CSV
+write.csv(tukey_df, "tukey_pairwise_all_proteins.csv", row.names = FALSE)
+print(tukey_df)
+```
+
+
+
+##### c) ESTIMATED MARGINAL MEANS/LEAST SQUARES MEANS PAIRWISE COMPARISON (LMM/LM MODEL)
+
+```{r}
+# Load Required Libraries
+library(emmeans)
+library(purrr)
+
+# Load Dataset
+df_subset <- read.csv("subset_protein_data.csv")
+final_results <- read.csv("final_model_results.csv")
+
+# Convert Factors
+df_subset$Condition <- as.factor(df_subset$Condition)
+df_subset$BioReplicate <- as.factor(df_subset$BioReplicate)
+
+# Pre-Filter Good Proteins (3 Replicates Per Condition, All 6 Time Points)
+good_proteins <- df_subset %>%
+  dplyr::group_by(Protein, Condition) %>%
+  dplyr::summarise(count = dplyr::n(), .groups = "drop") %>%
+  dplyr::filter(count == 3) %>%
+  dplyr::group_by(Protein) %>%
+  dplyr::summarise(n_cond = dplyr::n_distinct(Condition), .groups = "drop") %>%
+  dplyr::filter(n_cond == 6) %>%
+  dplyr::pull(Protein)
+
+cat("Number of proteins passing quality filter:", length(good_proteins), "\n")
+
+# Run emmeans pairwise comparisons
+emmeans_all <- list()
+
+for (prot in good_proteins) {
+  temp <- df_subset %>% filter(Protein == prot)
+  model_type <- final_results$ModelUsed[final_results$Protein == prot]
+  model <- tryCatch({
+    if (model_type == "LMM") {
+      lmer(Abundance ~ Condition + (1 | BioReplicate), data = temp)
+    } else {
+      lm(Abundance ~ Condition, data = temp)
+    }
+  }, error = function(e) {
+    cat("Model failed for", prot, "\n")
+    NULL
+  })
+
+  # Run emmeans If Model Is Valid
+  if (!is.null(model)) {
+    result <- tryCatch({
+      em <- emmeans(model, pairwise ~ Condition)
+      out <- as.data.frame(em$contrasts)
+      out$Protein <- prot
+      out
+    }, error = function(e) {
+      cat("emmeans failed for", prot, "\n")
+      NULL
+    })
+    if (!is.null(result)) {
+      emmeans_all[[prot]] <- result
+    }
+  }
+}
+
+# Combine And Correct P-values
+if (length(emmeans_all) == 0) {
+  warning("No valid emmeans results were collected.")
+  emmeans_df <- data.frame()
+} else {
+  emmeans_df <- bind_rows(emmeans_all)
+
+  # Applies FDR (Benjamini-Hochberg) correction to p-values
+  emmeans_df$adj_p <- p.adjust(emmeans_df$p.value, method = "fdr")
+
+  # Save to CSV
+  write.csv(emmeans_df, "emmeans_pairwise_all_proteins_filtered.csv", row.names = FALSE)
+  print(head(emmeans_df))
+}
+
+
+```
+
+
+##### d) PAIRWISE TIME POINT COMPARISONS VOLCANO PLOT 
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# View available contrasts to confirm direction
+print(unique(emmeans_df$contrast))  # Check for "T030 - T000" or "T000 - T030"
+
+# Detect which contrast exists (adjust accordingly)
+contrast_forward  <- "T030 - T000"
+contrast_reverse  <- "T000 - T030"
+
+# Filter for the available version of the contrast
+if (contrast_forward %in% unique(emmeans_df$contrast)) {
+  volcano_df <- emmeans_df %>%
+    filter(contrast == contrast_forward & !is.na(adj_p)) %>%
+    mutate(
+      log2FC = estimate,  # T030 - T000
+      neglog10_p = -log10(adj_p),
+      Significance = ifelse(adj_p < 0.05, "FDR < 0.05", "NS")
+    )
+} else if (contrast_reverse %in% unique(emmeans_df$contrast)) {
+  volcano_df <- emmeans_df %>%
+    filter(contrast == contrast_reverse & !is.na(adj_p)) %>%
+    mutate(
+      log2FC = -estimate,  # Flip sign to get T030 - T000
+      neglog10_p = -log10(adj_p),
+      Significance = ifelse(adj_p < 0.05, "FDR < 0.05", "NS")
+    )
+} else {
+  stop("Desired contrast (T030 vs T000) not found in emmeans_df$contrast.")
+}
+
+# Optional: inspect data
+print(head(volcano_df))
+
+# Create the volcano plot
+ggplot(volcano_df, aes(x = log2FC, y = neglog10_p, color = Significance)) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  scale_color_manual(values = c("FDR < 0.05" = "red", "NS" = "grey")) +
+  labs(
+    title = "Volcano Plot: Protein Abundance T030 vs T000",
+    subtitle = "Based on model-based EMMeans pairwise comparison",
+    x = "Log2 Fold Change (T030 – T000)",
+    y = "-log10(FDR-adjusted p-value)"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(color = "black"),              # Make all text darker
+    axis.text = element_text(color = "black"),         # Axis tick labels
+    axis.title = element_text(color = "black"),        # Axis titles
+    plot.title = element_text(color = "black", face = "bold"),    # Bold title
+    plot.subtitle = element_text(color = "black")      # Subtitle text
+  )
+```
+
+
+
+### 8) EXTRACT STATISTICALLY SIGNIFICANT PROTEIN DIFFERENCES
+
+```{r}
+# Load both files
+tukey_df <- read.csv("tukey_pairwise_all_proteins.csv")
+emmeans_df <- read.csv("emmeans_pairwise_all_proteins_filtered.csv")
+
+# Filter for significant comparisons (adj_p < 0.05)
+tukey_sig <- tukey_df %>% filter(adj_p < 0.05)
+emmeans_sig <- emmeans_df %>% filter(adj_p < 0.05)
+
+# Count Rejected Null Hypotheses 
+cat("Tukey: Number of significant pairwise comparisons:", nrow(tukey_sig), "\n")
+cat("Emmeans: Number of significant pairwise comparisons:", nrow(emmeans_sig), "\n")
+
+# Preview Top Results
+head(tukey_sig)
+head(emmeans_sig)
+
+# Save Significant Results
+write.csv(tukey_sig, "tukey_significant_pairs.csv", row.names = FALSE)
+write.csv(emmeans_sig, "emmeans_significant_pairs.csv", row.names = FALSE)
+
+```
+
+##### a) TOP 10 PROTEINS SIGNIFICANT COMPARISONS
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Step 1: Filter significant emmeans results
+emmeans_sig <- emmeans_df %>% filter(adj_p < 0.05)
+
+# Step 2: Create label of significant contrasts per protein
+emmeans_summary <- emmeans_sig %>%
+  group_by(Protein) %>%
+  summarise(
+    n_sig_pairs = n(),
+    timepoints = paste(contrast, collapse = ", "),
+    .groups = "drop"
+  )
+
+# Step 3: Select Top 10 Proteins by number of significant contrasts
+top_10 <- emmeans_summary %>%
+  arrange(desc(n_sig_pairs)) %>%
+  slice_head(n = 10)
+
+# Step 4: Plot with timepoints as labels on the left side
+ggplot(top_10, aes(x = reorder(Protein, -n_sig_pairs), y = n_sig_pairs)) +
+  geom_col(fill = "Gray") +
+  geom_text(
+    aes(label = timepoints),
+    hjust = 1.1, vjust = 0.5,
+    angle = 0,
+    color = "Black",
+    size = 3.5,
+    nudge_y = -0.1
+  ) +
+  labs(
+    title = "Top 10 Proteins with Most Significant Pairwise Differences",
+    x = "Protein",
+    y = "Number of Significant Comparisons"
+  ) +
+  coord_flip() +  # Flip axes so labels are on the left
+  theme_minimal(base_size = 14)
+
+```
+
+
+
+
+
+
