@@ -72,7 +72,7 @@ df <- proteins %>%
   left_join(meta, by = c("originalRUN" = "Run")) %>%                             # Join metadata
   filter(!is.na(Abundance))                                                      # Remove missing measurements
 
-# Print And Save Data File
+# Print and Save Data File
 print(df)
 write.csv(df, "merged_protein_long_format.csv", row.names = FALSE)
 ```
@@ -132,7 +132,7 @@ print(summary_tbl)
 write.csv(summary_tbl,"(summary_tbl.csv", row.names = FALSE)
 ```
 
-##### b) Per Protein One Way Anova Table
+##### b) Per Protein One-Way Anova Table
 
 ```{r}
 aov_full_list <- list()
@@ -202,7 +202,7 @@ for (prot in unique(df_subset$Protein)) {
 print(rm_results)
 ```
 
-##### b) RM ANOVA P-values & F- values Summary and BioreRlicate count check
+##### b) RM ANOVA P-values & F-values Summary and BioreRlicate count check
 
 ```{r}
 library(dplyr)
@@ -256,8 +256,6 @@ for (prot in unique(df_subset$Protein)) {
 print(head(rm_results))
 print(head(replicate_summary))
 
-library(dplyr)
-library(tibble)
 
 # Categorize p-values into bins
 rm_results$P_Significance <- cut(
@@ -297,7 +295,7 @@ write.csv(pval_summary_tbl, "results_pval_summary_tbl.csv", row.names = FALSE)
 
 ```
 
-##### c) RM ANOVA Summary per proteins
+##### c) RM ANOVA Summary per protein
 
 ```{r}
 # Initialize result list
@@ -319,7 +317,7 @@ for (prot in unique(df_subset$Protein)) {
     next
   }
 
-  # Try RM ANOVA and extract full table
+  # Try RM ANOVA and extract the full table
   tryCatch({
     model <- aov(Abundance ~ Condition + Error(BioReplicate/Condition), data = temp)
     summary_out <- summary(model)
@@ -415,7 +413,7 @@ print(summary_stats_clean)
 
 ```
 
-### 3) Linear Mixed Effects Model (LMM) & 4) Linaer Model (LM)
+### 3 & 4) Linear Mixed Effects Model (LMM) & Linear Model (LM)
 
 ```{r message=FALSE, warning=FALSE}
 
@@ -552,7 +550,7 @@ venn_plot <- ggVennDiagram(venn_sets, label_alpha = 0, edge_size = 0.5) +
 print(venn_plot)
 
 
-# --- Summary of significant protein overlaps (Venn diagram logic) ---
+# Summary of significant protein overlaps (Venn diagram logic)
 cat("Significant Proteins by Model:\n")
 cat("  sig_LMM      :", length(sig_LMM), "\n")
 cat("  sig_LM       :", length(sig_LM), "\n")
@@ -568,7 +566,7 @@ cat("  LMM ∩ LM ∩ Final :", length(Reduce(intersect, list(sig_LMM, sig_LM, s
 
 ```{r}
 
-# Summary:LMM and LM
+# Summary: LMM and LM
 
 lmm_summary <- final_results %>%
   filter(ModelUsed == "LMM", !is.na(LMM_p)) %>%
@@ -644,7 +642,7 @@ anova_compare_results <- anova_compare_results %>%
                             "Fail to reject H₀: No significant condition effect")
   )
 
-# Model Hypothesis Sumamary
+# Model Hypothesis Summary
 hypothesis_summary <- anova_compare_results %>%
   mutate(Decision = ifelse(Nested_F_p < 0.05, "Reject H₀", "Fail to reject H₀")) %>%
   group_by(Decision) %>%
@@ -654,7 +652,7 @@ hypothesis_summary <- anova_compare_results %>%
   )
 
 
-#Print ans Save results
+#Print and save results
 
 print(hypothesis_summary)
 print(anova_compare_results)
@@ -877,7 +875,7 @@ for (prot in good_proteins) {
     NULL
   })
 
-  # Run emmeans If Model Is Valid
+  # Run emmeans if the Model Is Valid
   if (!is.null(model)) {
     result <- tryCatch({
       em <- emmeans(model, pairwise ~ Condition)
@@ -1008,7 +1006,7 @@ library(ggplot2)
 # Step 1: Filter significant emmeans results
 emmeans_sig <- emmeans_df %>% filter(adj_p < 0.05)
 
-# Step 2: Create label of significant contrasts per protein
+# Step 2: Create a label of significant contrasts per protein
 emmeans_summary <- emmeans_sig %>%
   group_by(Protein) %>%
   summarise(
