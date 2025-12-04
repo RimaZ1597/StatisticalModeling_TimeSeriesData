@@ -122,3 +122,23 @@ The pipeline generates:
 * Venn diagram of significant proteins
 * Model usage heatmap
 * Volcano plot (T030 vs T000)
+  
+---
+
+## Result Discussion
+
+* This study presents a statistical evaluation of time-dependent proteomic changes in S. cerevisiae under osmotic stress, using a repeated-measures design and a layered modeling framework.
+
+* Initial one-way ANOVA detected significant timepoint effects in 52% of proteins, suggesting early rejection of the null hypothesis that protein abundance remains constant over time. However, it did not account for within-subject correlation.
+
+* Repeated measures ANOVA improved on this by modeling intra-subject variation but failed to detect strong replicate effects. The assumption of compound symmetry and limited power due to only three biological replicates likely contributed to its reduced sensitivity.
+
+* Linear mixed-effects models (LMMs) offered the most robust analysis, capturing both fixed time effects and random replicate-level variation. 
+
+* Among 47 proteins modeled with LMMs, 89% showed significant temporal changes, with moderate ICC values confirming replicate-specific contributions. For proteins where replicate effects were negligible or non-estimable, fixed-effects linear models (LMs) served as a fallback, identifying significant timepoint effects in 66% of remaining cases.
+
+* Overall, 71% of proteins showed significant time-dependent expression under at least one model.
+
+* This underscores the dynamic nature of the proteome in response to stress and validates the use of a model selection strategy guided by ICC and AIC. 
+
+* Future work should consider expanding the number of biological replicates and applying more flexible or hierarchical Bayesian models to better quantify subject-level variance and enhance inference reliability.
