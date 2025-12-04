@@ -5,7 +5,16 @@
 **Methods:** ANOVA · Repeated Measures ANOVA · LMM · LM · EMMeans · Pairwise Comparisons 
 
 ---
+## 📁 Introduction
 
+Understanding how cells modulate their proteomic composition in response to environmental challenges is a central question in systems biology. Saccharomyces
+cerevisiae serves as a well-established model for exploring dynamic responses to osmotic perturbation, which involve coordinated regulation across the proteome. Selevsek et al.(2015) generated a high-resolution temporal dataset using SWATH-MS, capturing protein abundance changes at six post-treatment intervals following NaCl-induced stress. 
+
+Building on this resource, the present study applies statistical methods tailored for longitudinal data. The goal is to test whether protein expression varies significantly across timepoints and whether replicate-level variability contributes meaningfully to overall variation, thereby identifying proteins responsive to osmotic stress. 
+
+Through a comparative framework involving fixed-effects ANOVA, repeated measures ANOVA, linear mixed-effects models (LMMs), and fixed-effects linear models (LMs), the analysis illustrates how progressively flexible statistical methods address core challenges in longitudinal proteomics, guiding model selection based on variance structure and model fit.
+
+---
 ## 📁 Project Overview
 
 This repository contains a fully reproducible **time-series proteomics analysis pipeline** implemented in R. The workflow analyzes protein abundance changes in *Saccharomyces cerevisiae* exposed to osmotic stress over six time points, using univariate statistical models and model-based pairwise comparisons.
@@ -45,7 +54,6 @@ install.packages(c(
 * `TIME_SERIES_DATA_ANALYSIS.Rmd`
 
 ---
-
 
 ## 📈 Analysis Steps
 
