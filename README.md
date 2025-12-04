@@ -29,7 +29,7 @@ All intermediate files (summary tables, model results, p-value tables, EMMeans o
 ---
 ## Installation & Requirements
 
-### ** Install Required R Packages**
+### Install Required R Packages
 
 ```r
 install.packages(c(
@@ -38,7 +38,7 @@ install.packages(c(
 ))
 ```
 
-### ** Ensure Files Are in the Working Directory**
+### Ensure Files Are in the Working Directory
 
 * `Selevsek2015_DIA_Spectronaut_annotation.csv`
 * `Selevsek2015.csv`
